@@ -73,10 +73,6 @@
 #define ELF_MREL( mach, type ) ( (mach) | ( (type) << 16 ) )
 
 /* Allow for building with older versions of elf.h */
-
-#if defined(__FreeBSD__)
-#undef EM_AARCH64
-#endif
 #ifndef EM_AARCH64
 #define EM_AARCH64 183
 #define R_AARCH64_NONE 0

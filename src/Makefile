@@ -15,7 +15,7 @@ CROSS_COMPILE	?= $(CROSS)
 #
 # Locations of tools
 #
-HOST_CC		:= $(CC)
+HOST_CC		:= gcc
 RM		:= rm -f
 TOUCH		:= touch
 MKDIR		:= mkdir
@@ -24,7 +24,7 @@ ECHO		:= echo
 PRINTF		:= printf
 PERL		:= perl
 TRUE		:= true
-CC		:= $(CROSS_COMPILE)$(CC)
+CC		:= $(CROSS_COMPILE)gcc
 CPP		:= $(CC) -E
 AS		:= $(CROSS_COMPILE)as
 LD		:= $(CROSS_COMPILE)ld
