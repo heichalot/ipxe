@@ -15,7 +15,7 @@ CROSS_COMPILE	?= $(CROSS)
 #
 # Locations of tools
 #
-HOST_CC		:= gcc
+HOST_CC		:= $(CC)
 RM		:= rm -f
 TOUCH		:= touch
 MKDIR		:= mkdir
@@ -24,7 +24,7 @@ ECHO		:= echo
 PRINTF		:= printf
 PERL		:= perl
 TRUE		:= true
-CC		:= $(CROSS_COMPILE)gcc
+CC		:= $(CROSS_COMPILE)$(CC)
 CPP		:= $(CC) -E
 AS		:= $(CROSS_COMPILE)as
 LD		:= $(CROSS_COMPILE)ld
@@ -219,6 +219,19 @@ VERSION		+= ($(GITVERSION))
 endif
 version :
 	@$(ECHO) "$(VERSION)"
+
+###############################################################################
+#
+# Predefined build shortcuts (for e.g. bin/ipxe.iso)
+
+# All drivers (excluding USB)
+#
+DRIVERS_ipxe	= $(DRIVERS_net) $(DRIVERS_infiniband) \
+		  $(DRIVERS_xen) $(DRIVERS_hyperv)
+
+# Raspberry Pi
+#
+DRIVERS_rpi	= smsc95xx lan78xx
 
 ###############################################################################
 #

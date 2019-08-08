@@ -1,0 +1,2 @@
+#define CPUID_SETTINGS
+#define VMWARE_SETTINGS
