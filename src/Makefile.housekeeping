@@ -78,6 +78,10 @@ ccdefs:
 
 ifeq ($(filter __ICC,$(CCDEFS)),__ICC)
 CCTYPE		:= icc
+else ifeq ($(filter __clang__,$(CCDEFS)),__clang__)
+CCTYPE		:= clang
+else ifeq ($(filter __GNUC__,$(CCDEFS)),__GNUC__)
+CCTYPE		:= gcc
 else
 CCTYPE		:= gcc
 endif
