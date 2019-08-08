@@ -169,6 +169,9 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
  */
 #define PRODUCT_SETTING_URI "http://ipxe.org/cfg/%s"
 
+#include <config/named.h>
+#include NAMED_CONFIG(branding.h)
 #include <config/local/branding.h>
+#include LOCAL_NAMED_CONFIG(branding.h)
 
 #endif /* CONFIG_BRANDING_H */
