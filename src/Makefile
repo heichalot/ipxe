@@ -2,6 +2,7 @@
 #
 # Initialise various variables
 #
+#cosmo
 
 CLEANUP		:=
 CFLAGS		:=
