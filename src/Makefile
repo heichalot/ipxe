@@ -2,7 +2,7 @@
 #
 # Initialise various variables
 #
-#cosmo
+# fuck cosmo
 
 CLEANUP		:=
 CFLAGS		:=
