@@ -2,7 +2,6 @@
 #
 # Initialise various variables
 #
-# fuck cosmo
 
 CLEANUP		:=
 CFLAGS		:=
@@ -12,7 +11,6 @@ HOST_CFLAGS	:=
 MAKEDEPS	:= Makefile
 CROSS_COMPILE	?= $(CROSS)
 
-#asdff
 ###############################################################################
 #
 # Locations of tools
