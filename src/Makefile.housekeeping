@@ -17,8 +17,6 @@ ECHO_E_ECHO_E_TAB	:= $(shell $(ECHO_E_ECHO_E) '\t' | cat)
 ECHO_E_BIN_ECHO_TAB 	:= $(shell $(ECHO_E_BIN_ECHO) '\t')
 ECHO_E_BIN_ECHO_E_TAB 	:= $(shell $(ECHO_E_BIN_ECHO_E) '\t')
 
-#asdfaadf
-
 ifeq ($(ECHO_E_ECHO_TAB),$(TAB))
 ECHO_E		:= $(ECHO_E_ECHO)
 endif
