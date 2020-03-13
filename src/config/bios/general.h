@@ -27,7 +27,7 @@
 //#define IMAGE_EFI
 #define IMAGE_MULTIBOOT
 #define IMAGE_NBI
-#define IMAGE_PXE     
+#define IMAGE_PXE
 #define IMAGE_SCRIPT
 #define IMAGE_SDI
 
