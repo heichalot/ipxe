@@ -818,6 +818,7 @@ int usb_control ( struct usb_device *usb, unsigned int request,
 				       "failed: %s\n", usb->name, request,
 				       value, index, strerror ( rc ) );
 				free_iob ( cmplt );
+				usb_endpoint_reset ( ep );
 				return rc;
 			}
 
@@ -1635,6 +1636,11 @@ static void unregister_usb ( struct usb_device *usb ) {
 	struct usb_hub *hub = port->hub;
 	struct io_buffer *iobuf;
 	struct io_buffer *tmp;
+
+	DBGC ( usb, "USB %s addr %d %04x:%04x class %d:%d:%d removed\n",
+	       usb->name, usb->address, le16_to_cpu ( usb->device.vendor ),
+	       le16_to_cpu ( usb->device.product ), usb->device.class.class,
+	       usb->device.class.subclass, usb->device.class.protocol );
 
 	/* Sanity checks */
 	assert ( port->usb == usb );
