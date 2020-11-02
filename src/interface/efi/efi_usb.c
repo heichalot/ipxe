@@ -30,7 +30,7 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #include <errno.h>
 #include <assert.h>
 #include <ipxe/efi/efi.h>
-#include <ipxe/efi/efi_utils.h>
+#include <ipxe/efi/efi_path.h>
 #include <ipxe/efi/efi_driver.h>
 #include <ipxe/efi/efi_usb.h>
 #include <ipxe/usb.h>
@@ -73,10 +73,10 @@ static const char * efi_usb_direction_name ( EFI_USB_DATA_DIRECTION direction ){
 static VOID EFIAPI efi_usb_timer ( EFI_EVENT event __unused,
 				   VOID *context ) {
 	struct efi_usb_endpoint *usbep = context;
-	struct usb_bus *bus = usbep->usbintf->usbdev->usb->port->hub->bus;
+	struct usb_function *func = usbep->usbintf->usbdev->func;
 
 	/* Poll bus */
-	usb_poll ( bus );
+	usb_poll ( func->usb->port->hub->bus );
 
 	/* Refill endpoint */
 	if ( usbep->ep.open )
@@ -179,7 +179,7 @@ static int efi_usb_open ( struct efi_usb_interface *usbintf,
 	}
 
 	/* Allocate and initialise structure */
-	usb_endpoint_init ( &usbep->ep, usbdev->usb, driver );
+	usb_endpoint_init ( &usbep->ep, usbdev->func->usb, driver );
 	usb_endpoint_describe ( &usbep->ep, endpoint, attributes, mtu, 0,
 				( interval << 3 /* microframes */ ) );
 
@@ -354,7 +354,7 @@ static int efi_usb_sync_transfer ( struct efi_usb_interface *usbintf,
 	for ( i = 0 ; ( ( timeout == 0 ) || ( i < timeout ) ) ; i++ ) {
 
 		/* Poll bus */
-		usb_poll ( usbdev->usb->port->hub->bus );
+		usb_poll ( usbdev->func->usb->port->hub->bus );
 
 		/* Check for completion */
 		if ( usbep->rc != -EINPROGRESS ) {
@@ -594,7 +594,7 @@ efi_usb_control_transfer ( EFI_USB_IO_PROTOCOL *usbio,
 		efi_usb_close_all ( usbintf );
 
 	/* Issue control transfer */
-	if ( ( rc = usb_control ( usbdev->usb, request, value, index,
+	if ( ( rc = usb_control ( usbdev->func->usb, request, value, index,
 				  data, len ) ) != 0 ) {
 		DBGC ( usbdev, "USBDEV %s control %04x:%04x:%04x:%04x %p+%zx "
 		       "failed: %s\n", usbintf->name, request, value, index,
@@ -841,7 +841,7 @@ efi_usb_get_device_descriptor ( EFI_USB_IO_PROTOCOL *usbio,
 	DBGC2 ( usbdev, "USBDEV %s get device descriptor\n", usbintf->name );
 
 	/* Copy cached device descriptor */
-	memcpy ( efidesc, &usbdev->usb->device, sizeof ( *efidesc ) );
+	memcpy ( efidesc, &usbdev->func->usb->device, sizeof ( *efidesc ) );
 
 	return 0;
 }
@@ -972,8 +972,9 @@ efi_usb_get_string_descriptor ( EFI_USB_IO_PROTOCOL *usbio, UINT16 language,
 	saved_tpl = bs->RaiseTPL ( TPL_CALLBACK );
 
 	/* Read descriptor header */
-	if ( ( rc = usb_get_descriptor ( usbdev->usb, 0, USB_STRING_DESCRIPTOR,
-					 index, language, &header,
+	if ( ( rc = usb_get_descriptor ( usbdev->func->usb, 0,
+					 USB_STRING_DESCRIPTOR, index,
+					 language, &header,
 					 sizeof ( header ) ) ) != 0 ) {
 		DBGC ( usbdev, "USBDEV %s could not get string %d:%d "
 		       "descriptor header: %s\n", usbintf->name, language,
@@ -981,6 +982,12 @@ efi_usb_get_string_descriptor ( EFI_USB_IO_PROTOCOL *usbio, UINT16 language,
 		goto err_get_header;
 	}
 	len = header.len;
+	if ( len < sizeof ( header ) ) {
+		DBGC ( usbdev, "USBDEV %s underlength string %d:%d\n",
+		       usbintf->name, language, index );
+		rc = -EINVAL;
+		goto err_len;
+	}
 
 	/* Allocate buffer */
 	if ( ( efirc = bs->AllocatePool ( EfiBootServicesData, len,
@@ -990,9 +997,9 @@ efi_usb_get_string_descriptor ( EFI_USB_IO_PROTOCOL *usbio, UINT16 language,
 	}
 
 	/* Read whole descriptor */
-	if ( ( rc = usb_get_descriptor ( usbdev->usb, 0, USB_STRING_DESCRIPTOR,
-					 index, language, buffer,
-					 len ) ) != 0 ) {
+	if ( ( rc = usb_get_descriptor ( usbdev->func->usb, 0,
+					 USB_STRING_DESCRIPTOR, index,
+					 language, buffer, len ) ) != 0 ) {
 		DBGC ( usbdev, "USBDEV %s could not get string %d:%d "
 		       "descriptor: %s\n", usbintf->name, language,
 		       index, strerror ( rc ) );
@@ -1014,6 +1021,7 @@ efi_usb_get_string_descriptor ( EFI_USB_IO_PROTOCOL *usbio, UINT16 language,
  err_get_descriptor:
 	bs->FreePool ( buffer );
  err_alloc:
+ err_len:
  err_get_header:
 	bs->RestoreTPL ( saved_tpl );
 	return EFIRC ( rc );
@@ -1037,9 +1045,8 @@ efi_usb_get_supported_languages ( EFI_USB_IO_PROTOCOL *usbio,
 	DBGC2 ( usbdev, "USBDEV %s get supported languages\n", usbintf->name );
 
 	/* Return cached supported languages */
-	*languages = ( ( ( void * ) usbdev->languages ) +
-		       sizeof ( *(usbdev->languages) ) );
-	*len = usbdev->languages->len;
+	*languages = usbdev->lang;
+	*len = usbdev->lang_len;
 
 	return 0;
 }
@@ -1101,25 +1108,13 @@ static EFI_USB_IO_PROTOCOL efi_usb_io_protocol = {
 static int efi_usb_install ( struct efi_usb_device *usbdev,
 			     unsigned int interface ) {
 	EFI_BOOT_SERVICES *bs = efi_systab->BootServices;
-	struct efi_device *efidev = usbdev->efidev;
+	struct usb_function *func = usbdev->func;
 	struct efi_usb_interface *usbintf;
-	struct usb_device *usb;
-	EFI_DEVICE_PATH_PROTOCOL *path_end;
-	USB_DEVICE_PATH *usbpath;
-	unsigned int path_count;
-	size_t path_prefix_len;
-	size_t path_len;
 	EFI_STATUS efirc;
 	int rc;
 
-	/* Calculate device path length */
-	path_count = ( usb_depth ( usbdev->usb ) + 1 );
-	path_prefix_len = efi_devpath_len ( efidev->path );
-	path_len = ( path_prefix_len + ( path_count * sizeof ( *usbpath ) ) +
-		     sizeof ( *path_end ) );
-
 	/* Allocate and initialise structure */
-	usbintf = zalloc ( sizeof ( *usbintf ) + path_len );
+	usbintf = zalloc ( sizeof ( *usbintf ) );
 	if ( ! usbintf ) {
 		rc = -ENOMEM;
 		goto err_alloc;
@@ -1130,22 +1125,12 @@ static int efi_usb_install ( struct efi_usb_device *usbdev,
 	usbintf->interface = interface;
 	memcpy ( &usbintf->usbio, &efi_usb_io_protocol,
 		 sizeof ( usbintf->usbio ) );
-	usbintf->path = ( ( ( void * ) usbintf ) + sizeof ( *usbintf ) );
 
 	/* Construct device path */
-	memcpy ( usbintf->path, efidev->path, path_prefix_len );
-	path_end = ( ( ( void * ) usbintf->path ) + path_len -
-		     sizeof ( *path_end ) );
-	path_end->Type = END_DEVICE_PATH_TYPE;
-	path_end->SubType = END_ENTIRE_DEVICE_PATH_SUBTYPE;
-	path_end->Length[0] = sizeof ( *path_end );
-	usbpath = ( ( ( void * ) path_end ) - sizeof ( *usbpath ) );
-	usbpath->InterfaceNumber = interface;
-	for ( usb = usbdev->usb ; usb ; usbpath--, usb = usb->port->hub->usb ) {
-		usbpath->Header.Type = MESSAGING_DEVICE_PATH;
-		usbpath->Header.SubType = MSG_USB_DP;
-		usbpath->Header.Length[0] = sizeof ( *usbpath );
-		usbpath->ParentPortNumber = ( usb->port->address - 1 );
+	usbintf->path = efi_usb_path ( func );
+	if ( ! usbintf->path ) {
+		rc = -ENODEV;
+		goto err_path;
 	}
 
 	/* Add to list of interfaces */
@@ -1176,6 +1161,8 @@ static int efi_usb_install ( struct efi_usb_device *usbdev,
 	efi_usb_close_all ( usbintf );
 	efi_usb_free_all ( usbintf );
 	list_del ( &usbintf->list );
+	free ( usbintf->path );
+ err_path:
 	free ( usbintf );
  err_alloc:
 	return rc;
@@ -1213,6 +1200,9 @@ static void efi_usb_uninstall ( struct efi_usb_interface *usbintf ) {
 	/* Remove from list of interfaces */
 	list_del ( &usbintf->list );
 
+	/* Free device path */
+	free ( usbintf->path );
+
 	/* Free interface */
 	free ( usbintf );
 }
@@ -1246,18 +1236,12 @@ static int efi_usb_probe ( struct usb_function *func,
 	struct usb_device *usb = func->usb;
 	struct efi_usb_device *usbdev;
 	struct efi_usb_interface *usbintf;
-	struct efi_device *efidev;
 	struct usb_descriptor_header header;
+	struct usb_descriptor_header *lang;
 	size_t config_len;
+	size_t lang_len;
 	unsigned int i;
 	int rc;
-
-	/* Find parent EFI device */
-	efidev = efidev_parent ( &func->dev );
-	if ( ! efidev ) {
-		rc = -ENOTTY;
-		goto err_no_efidev;
-	}
 
 	/* Get configuration length */
 	config_len = le16_to_cpu ( config->len );
@@ -1268,27 +1252,30 @@ static int efi_usb_probe ( struct usb_function *func,
 		/* Assume no strings are present */
 		header.len = 0;
 	}
+	lang_len = ( ( header.len >= sizeof ( header ) ) ?
+		     ( header.len - sizeof ( header ) ) : 0 );
 
 	/* Allocate and initialise structure */
-	usbdev = zalloc ( sizeof ( *usbdev ) + config_len + header.len );
+	usbdev = zalloc ( sizeof ( *usbdev ) + config_len +
+			  sizeof ( *lang ) + lang_len );
 	if ( ! usbdev ) {
 		rc = -ENOMEM;
 		goto err_alloc;
 	}
 	usb_func_set_drvdata ( func, usbdev );
 	usbdev->name = func->name;
-	usbdev->usb = usb;
-	usbdev->efidev = efidev;
+	usbdev->func = func;
 	usbdev->config = ( ( ( void * ) usbdev ) + sizeof ( *usbdev ) );
 	memcpy ( usbdev->config, config, config_len );
-	usbdev->languages = ( ( ( void * ) usbdev->config ) + config_len );
+	lang = ( ( ( void * ) usbdev->config ) + config_len );
+	usbdev->lang = ( ( ( void * ) lang ) + sizeof ( *lang ) );
+	usbdev->lang_len = lang_len;
 	INIT_LIST_HEAD ( &usbdev->interfaces );
 
-	/* Get supported languages descriptor */
-	if ( header.len &&
-	     ( rc = usb_get_descriptor ( usb, 0, USB_STRING_DESCRIPTOR, 0, 0,
-					 usbdev->languages,
-					 header.len ) ) != 0 ) {
+	/* Get supported languages descriptor, if applicable */
+	if ( lang_len &&
+	     ( ( rc = usb_get_descriptor ( usb, 0, USB_STRING_DESCRIPTOR,
+					   0, 0, lang, header.len ) ) != 0 ) ) {
 		DBGC ( usbdev, "USBDEV %s could not get supported languages: "
 		       "%s\n", usbdev->name, strerror ( rc ) );
 		goto err_get_languages;
@@ -1313,7 +1300,6 @@ static int efi_usb_probe ( struct usb_function *func,
  err_get_languages:
 	free ( usbdev );
  err_alloc:
- err_no_efidev:
 	return rc;
 }
 
@@ -1343,7 +1329,7 @@ static struct usb_device_id efi_usb_ids[] = {
 };
 
 /** USB I/O protocol driver */
-struct usb_driver usbio_driver __usb_driver = {
+struct usb_driver usbio_driver __usb_fallback_driver = {
 	.ids = efi_usb_ids,
 	.id_count = ( sizeof ( efi_usb_ids ) / sizeof ( efi_usb_ids[0] ) ),
 	.class = USB_CLASS_ID ( USB_ANY_ID, USB_ANY_ID, USB_ANY_ID ),

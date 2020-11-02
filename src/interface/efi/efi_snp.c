@@ -33,8 +33,10 @@ FILE_LICENCE ( GPL2_OR_LATER );
 #include <ipxe/efi/efi.h>
 #include <ipxe/efi/efi_driver.h>
 #include <ipxe/efi/efi_strings.h>
+#include <ipxe/efi/efi_path.h>
 #include <ipxe/efi/efi_utils.h>
 #include <ipxe/efi/efi_watchdog.h>
+#include <ipxe/efi/efi_null.h>
 #include <ipxe/efi/efi_snp.h>
 #include <usr/autoboot.h>
 #include <config/general.h>
@@ -1623,13 +1625,9 @@ static int efi_snp_probe ( struct net_device *netdev ) {
 	EFI_BOOT_SERVICES *bs = efi_systab->BootServices;
 	struct efi_device *efidev;
 	struct efi_snp_device *snpdev;
-	EFI_DEVICE_PATH_PROTOCOL *path_end;
-	MAC_ADDR_DEVICE_PATH *macpath;
-	VLAN_DEVICE_PATH *vlanpath;
-	size_t path_prefix_len = 0;
 	unsigned int ifcnt;
-	unsigned int tag;
 	void *interface;
+	int leak = 0;
 	EFI_STATUS efirc;
 	int rc;
 
@@ -1713,40 +1711,12 @@ static int efi_snp_probe ( struct net_device *netdev ) {
 				       sizeof ( snpdev->name[0] ) ),
 		       "%s", netdev->name );
 
-	/* Allocate the new device path */
-	path_prefix_len = efi_devpath_len ( efidev->path );
-	snpdev->path = zalloc ( path_prefix_len + sizeof ( *macpath ) +
-				sizeof ( *vlanpath ) + sizeof ( *path_end ) );
+	/* Construct device path */
+	snpdev->path = efi_netdev_path ( netdev );
 	if ( ! snpdev->path ) {
 		rc = -ENOMEM;
-		goto err_alloc_device_path;
+		goto err_path;
 	}
-
-	/* Populate the device path */
-	memcpy ( snpdev->path, efidev->path, path_prefix_len );
-	macpath = ( ( ( void * ) snpdev->path ) + path_prefix_len );
-	memset ( macpath, 0, sizeof ( *macpath ) );
-	macpath->Header.Type = MESSAGING_DEVICE_PATH;
-	macpath->Header.SubType = MSG_MAC_ADDR_DP;
-	macpath->Header.Length[0] = sizeof ( *macpath );
-	memcpy ( &macpath->MacAddress, netdev->ll_addr,
-		 netdev->ll_protocol->ll_addr_len );
-	macpath->IfType = ntohs ( netdev->ll_protocol->ll_proto );
-	if ( ( tag = vlan_tag ( netdev ) ) ) {
-		vlanpath = ( ( ( void * ) macpath ) + sizeof ( *macpath ) );
-		memset ( vlanpath, 0, sizeof ( *vlanpath ) );
-		vlanpath->Header.Type = MESSAGING_DEVICE_PATH;
-		vlanpath->Header.SubType = MSG_VLAN_DP;
-		vlanpath->Header.Length[0] = sizeof ( *vlanpath );
-		vlanpath->VlanId = tag;
-		path_end = ( ( ( void * ) vlanpath ) + sizeof ( *vlanpath ) );
-	} else {
-		path_end = ( ( ( void * ) macpath ) + sizeof ( *macpath ) );
-	}
-	memset ( path_end, 0, sizeof ( *path_end ) );
-	path_end->Type = END_DEVICE_PATH_TYPE;
-	path_end->SubType = END_ENTIRE_DEVICE_PATH_SUBTYPE;
-	path_end->Length[0] = sizeof ( *path_end );
 
 	/* Install the SNP */
 	if ( ( efirc = bs->InstallMultipleProtocolInterfaces (
@@ -1826,7 +1796,7 @@ static int efi_snp_probe ( struct net_device *netdev ) {
 
 	list_del ( &snpdev->list );
 	if ( snpdev->package_list )
-		efi_snp_hii_uninstall ( snpdev );
+		leak |= efi_snp_hii_uninstall ( snpdev );
 	efi_child_del ( efidev->device, snpdev->handle );
  err_efi_child_add:
 	bs->CloseProtocol ( snpdev->handle, &efi_nii31_protocol_guid,
@@ -1835,7 +1805,7 @@ static int efi_snp_probe ( struct net_device *netdev ) {
 	bs->CloseProtocol ( snpdev->handle, &efi_nii_protocol_guid,
 			    efi_image_handle, snpdev->handle );
  err_open_nii:
-	bs->UninstallMultipleProtocolInterfaces (
+	if ( ( efirc = bs->UninstallMultipleProtocolInterfaces (
 			snpdev->handle,
 			&efi_simple_network_protocol_guid, &snpdev->snp,
 			&efi_device_path_protocol_guid, snpdev->path,
@@ -1843,17 +1813,30 @@ static int efi_snp_probe ( struct net_device *netdev ) {
 			&efi_nii31_protocol_guid, &snpdev->nii,
 			&efi_component_name2_protocol_guid, &snpdev->name2,
 			&efi_load_file_protocol_guid, &snpdev->load_file,
-			NULL );
+			NULL ) ) != 0 ) {
+		DBGC ( snpdev, "SNPDEV %p could not uninstall: %s\n",
+		       snpdev, strerror ( -EEFI ( efirc ) ) );
+		efi_nullify_snp ( &snpdev->snp );
+		efi_nullify_nii ( &snpdev->nii );
+		efi_nullify_name2 ( &snpdev->name2 );
+		efi_nullify_load_file ( &snpdev->load_file );
+		leak = 1;
+	}
  err_install_protocol_interface:
-	free ( snpdev->path );
- err_alloc_device_path:
+	if ( ! leak )
+		free ( snpdev->path );
+ err_path:
 	bs->CloseEvent ( snpdev->snp.WaitForPacket );
  err_create_event:
  err_ll_addr_len:
-	netdev_put ( netdev );
-	free ( snpdev );
+	if ( ! leak ) {
+		netdev_put ( netdev );
+		free ( snpdev );
+	}
  err_alloc_snp:
  err_no_efidev:
+	if ( leak )
+		DBGC ( snpdev, "SNPDEV %p nullified and leaked\n", snpdev );
 	return rc;
 }
 
@@ -1890,6 +1873,8 @@ static void efi_snp_notify ( struct net_device *netdev ) {
 static void efi_snp_remove ( struct net_device *netdev ) {
 	EFI_BOOT_SERVICES *bs = efi_systab->BootServices;
 	struct efi_snp_device *snpdev;
+	int leak = 0;
+	EFI_STATUS efirc;
 
 	/* Locate SNP device */
 	snpdev = efi_snp_demux ( netdev );
@@ -1901,13 +1886,13 @@ static void efi_snp_remove ( struct net_device *netdev ) {
 	/* Uninstall the SNP */
 	list_del ( &snpdev->list );
 	if ( snpdev->package_list )
-		efi_snp_hii_uninstall ( snpdev );
+		leak |= efi_snp_hii_uninstall ( snpdev );
 	efi_child_del ( snpdev->efidev->device, snpdev->handle );
 	bs->CloseProtocol ( snpdev->handle, &efi_nii_protocol_guid,
 			    efi_image_handle, snpdev->handle );
 	bs->CloseProtocol ( snpdev->handle, &efi_nii31_protocol_guid,
 			    efi_image_handle, snpdev->handle );
-	bs->UninstallMultipleProtocolInterfaces (
+	if ( ( efirc = bs->UninstallMultipleProtocolInterfaces (
 			snpdev->handle,
 			&efi_simple_network_protocol_guid, &snpdev->snp,
 			&efi_device_path_protocol_guid, snpdev->path,
@@ -1915,11 +1900,26 @@ static void efi_snp_remove ( struct net_device *netdev ) {
 			&efi_nii31_protocol_guid, &snpdev->nii,
 			&efi_component_name2_protocol_guid, &snpdev->name2,
 			&efi_load_file_protocol_guid, &snpdev->load_file,
-			NULL );
-	free ( snpdev->path );
+			NULL ) ) != 0 ) {
+		DBGC ( snpdev, "SNPDEV %p could not uninstall: %s\n",
+		       snpdev, strerror ( -EEFI ( efirc ) ) );
+		efi_nullify_snp ( &snpdev->snp );
+		efi_nullify_nii ( &snpdev->nii );
+		efi_nullify_name2 ( &snpdev->name2 );
+		efi_nullify_load_file ( &snpdev->load_file );
+		leak = 1;
+	}
+	if ( ! leak )
+		free ( snpdev->path );
 	bs->CloseEvent ( snpdev->snp.WaitForPacket );
-	netdev_put ( snpdev->netdev );
-	free ( snpdev );
+	if ( ! leak ) {
+		netdev_put ( snpdev->netdev );
+		free ( snpdev );
+	}
+
+	/* Report leakage, if applicable */
+	if ( leak )
+		DBGC ( snpdev, "SNPDEV %p nullified and leaked\n", snpdev );
 }
 
 /** SNP driver */
