@@ -462,6 +462,11 @@ static int intelxvf_probe ( struct pci_device *pci ) {
 		goto err_ioremap;
 	}
 
+	/* Configure DMA */
+	intel->dma = &pci->dma;
+	dma_set_mask_64bit ( intel->dma );
+	netdev->dma = intel->dma;
+
 	/* Reset the function */
 	intelxvf_reset ( intel );
 

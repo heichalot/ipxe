@@ -975,9 +975,8 @@ static int nii_transmit ( struct net_device *netdev,
 
 	/* Construct parameter block */
 	memset ( &cpb, 0, sizeof ( cpb ) );
-	cpb.FrameAddr = virt_to_bus ( iobuf->data );
+	cpb.FrameAddr = ( ( intptr_t ) iobuf->data );
 	cpb.DataLen = iob_len ( iobuf );
-	cpb.MediaheaderLen = netdev->ll_protocol->ll_header_len;
 
 	/* Transmit packet */
 	op = NII_OP ( PXE_OPCODE_TRANSMIT,
@@ -1044,7 +1043,7 @@ static void nii_poll_rx ( struct net_device *netdev ) {
 
 		/* Construct parameter block */
 		memset ( &cpb, 0, sizeof ( cpb ) );
-		cpb.BufferAddr = virt_to_bus ( nii->rxbuf->data );
+		cpb.BufferAddr = ( ( intptr_t ) nii->rxbuf->data );
 		cpb.BufferLen = iob_tailroom ( nii->rxbuf );
 
 		/* Issue command */

@@ -32,7 +32,6 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #include <ipxe/ethernet.h>
 #include <ipxe/if_ether.h>
 #include <ipxe/iobuf.h>
-#include <ipxe/malloc.h>
 #include <ipxe/pci.h>
 #include "intelx.h"
 
@@ -410,6 +409,11 @@ static int intelx_probe ( struct pci_device *pci ) {
 		rc = -ENODEV;
 		goto err_ioremap;
 	}
+
+	/* Configure DMA */
+	intel->dma = &pci->dma;
+	dma_set_mask_64bit ( intel->dma );
+	netdev->dma = intel->dma;
 
 	/* Reset the NIC */
 	if ( ( rc = intelx_reset ( intel ) ) != 0 )
