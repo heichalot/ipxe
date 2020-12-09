@@ -319,13 +319,15 @@ struct tls_connection {
 	struct digest_algorithm *handshake_digest;
 	/** Digest algorithm context used for handshake verification */
 	uint8_t *handshake_ctx;
-	/** Client certificate (if used) */
-	struct x509_certificate *cert;
+	/** Client certificate chain (if used) */
+	struct x509_chain *certs;
 	/** Secure renegotiation flag */
 	int secure_renegotiation;
 	/** Verification data */
 	struct tls_verify_data verify;
 
+	/** Root of trust (or NULL to use default) */
+	struct x509_root *root;
 	/** Server certificate chain */
 	struct x509_chain *chain;
 	/** Certificate validator */
@@ -379,6 +381,6 @@ struct tls_connection {
 #define TLS_RX_ALIGN 16
 
 extern int add_tls ( struct interface *xfer, const char *name,
-		     struct interface **next );
+		     struct x509_root *root );
 
 #endif /* _IPXE_TLS_H */
