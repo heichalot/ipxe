@@ -45,6 +45,7 @@ FILE_LICENCE ( GPL2_OR_LATER );
 #include <ipxe/x509.h>
 #include <ipxe/privkey.h>
 #include <ipxe/certstore.h>
+#include <ipxe/rootcert.h>
 #include <ipxe/rbg.h>
 #include <ipxe/validator.h>
 #include <ipxe/job.h>
@@ -349,7 +350,9 @@ static void free_tls_session ( struct refcnt *refcnt ) {
 	/* Remove from list of sessions */
 	list_del ( &session->list );
 
-	/* Free session ticket */
+	/* Free dynamically-allocated resources */
+	x509_root_put ( session->root );
+	privkey_put ( session->key );
 	free ( session->ticket );
 
 	/* Free session */
@@ -380,6 +383,8 @@ static void free_tls ( struct refcnt *refcnt ) {
 	}
 	x509_chain_put ( tls->certs );
 	x509_chain_put ( tls->chain );
+	x509_root_put ( tls->root );
+	privkey_put ( tls->key );
 
 	/* Drop reference to session */
 	assert ( list_empty ( &tls->list ) );
@@ -1256,6 +1261,7 @@ static int tls_send_certificate_verify ( struct tls_connection *tls ) {
 	struct digest_algorithm *digest = tls->handshake_digest;
 	struct x509_certificate *cert = x509_first ( tls->certs );
 	struct pubkey_algorithm *pubkey = cert->signature_algorithm->pubkey;
+	struct asn1_cursor *key = privkey_cursor ( tls->key );
 	uint8_t digest_out[ digest->digestsize ];
 	uint8_t ctx[ pubkey->ctxsize ];
 	struct tls_signature_hash_algorithm *sig_hash = NULL;
@@ -1265,8 +1271,7 @@ static int tls_send_certificate_verify ( struct tls_connection *tls ) {
 	tls_verify_handshake ( tls, digest_out );
 
 	/* Initialise public-key algorithm */
-	if ( ( rc = pubkey_init ( pubkey, ctx, private_key.data,
-				  private_key.len ) ) != 0 ) {
+	if ( ( rc = pubkey_init ( pubkey, ctx, key->data, key->len ) ) != 0 ) {
 		DBGC ( tls, "TLS %p could not initialise %s client private "
 		       "key: %s\n", tls, pubkey->name, strerror ( rc ) );
 		goto err_pubkey_init;
@@ -1873,7 +1878,7 @@ static int tls_new_certificate_request ( struct tls_connection *tls,
 	tls->certs = NULL;
 
 	/* Determine client certificate to be sent */
-	cert = certstore_find_key ( &private_key );
+	cert = certstore_find_key ( tls->key );
 	if ( ! cert ) {
 		DBGC ( tls, "TLS %p could not find certificate corresponding "
 		       "to private key\n", tls );
@@ -3096,7 +3101,9 @@ static int tls_session ( struct tls_connection *tls, const char *name ) {
 
 	/* Find existing matching session, if any */
 	list_for_each_entry ( session, &tls_sessions, list ) {
-		if ( strcmp ( name, session->name ) == 0 ) {
+		if ( ( strcmp ( name, session->name ) == 0 ) &&
+		     ( tls->root == session->root ) &&
+		     ( tls->key == session->key ) ) {
 			ref_get ( &session->refcnt );
 			tls->session = session;
 			DBGC ( tls, "TLS %p joining session %s\n", tls, name );
@@ -3115,6 +3122,8 @@ static int tls_session ( struct tls_connection *tls, const char *name ) {
 	name_copy = ( ( ( void * ) session ) + sizeof ( *session ) );
 	strcpy ( name_copy, name );
 	session->name = name_copy;
+	session->root = x509_root_get ( tls->root );
+	session->key = privkey_get ( tls->key );
 	INIT_LIST_HEAD ( &session->conn );
 	list_add ( &session->list, &tls_sessions );
 
@@ -3142,10 +3151,11 @@ static int tls_session ( struct tls_connection *tls, const char *name ) {
  * @v xfer		Data transfer interface
  * @v name		Host name
  * @v root		Root of trust (or NULL to use default)
+ * @v key		Private key (or NULL to use default)
  * @ret rc		Return status code
  */
 int add_tls ( struct interface *xfer, const char *name,
-	      struct x509_root *root ) {
+	      struct x509_root *root, struct private_key *key ) {
 	struct tls_connection *tls;
 	int rc;
 
@@ -3163,7 +3173,8 @@ int add_tls ( struct interface *xfer, const char *name,
 	intf_init ( &tls->validator, &tls_validator_desc, &tls->refcnt );
 	process_init_stopped ( &tls->process, &tls_process_desc,
 			       &tls->refcnt );
-	tls->root = root;
+	tls->key = privkey_get ( key ? key : &private_key );
+	tls->root = x509_root_get ( root ? root : &root_certificates );
 	tls->version = TLS_VERSION_TLS_1_2;
 	tls_clear_cipher ( tls, &tls->tx_cipherspec );
 	tls_clear_cipher ( tls, &tls->tx_cipherspec_pending );

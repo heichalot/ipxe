@@ -39,6 +39,7 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #undef	NET_PROTO_FCOE		/* Fibre Channel over Ethernet protocol */
 #define	NET_PROTO_STP		/* Spanning Tree protocol */
 #define	NET_PROTO_LACP		/* Link Aggregation control protocol */
+#define	NET_PROTO_EAPOL		/* EAP over LAN protocol */
 
 /*
  * PXE support
@@ -154,6 +155,7 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 //#define PROFSTAT_CMD		/* Profiling commands */
 //#define NTP_CMD		/* NTP commands */
 //#define CERT_CMD		/* Certificate management commands */
+//#define IMAGE_MEM_CMD		/* Read memory command */
 
 /*
  * ROM-specific options
