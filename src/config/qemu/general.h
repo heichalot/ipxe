@@ -4,7 +4,7 @@
 
 /* Extend banner timeout */
 #undef BANNER_TIMEOUT
-#define BANNER_TIMEOUT 30
+#define BANNER_TIMEOUT 40
 
 /* Work around missing EFI_PXE_BASE_CODE_PROTOCOL */
 #define EFI_DOWNGRADE_UX
