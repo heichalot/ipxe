@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2014 Michael Brown <mbrown@fensystems.co.uk>.
+ * Copyright (C) 2021 Michael Brown <mbrown@fensystems.co.uk>.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License as
@@ -25,55 +25,70 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 
 #include <string.h>
 #include <errno.h>
+#include <ipxe/cachedhcp.h>
 #include <ipxe/efi/efi.h>
-#include <ipxe/efi/efi_autoboot.h>
-#include <ipxe/efi/Protocol/SimpleNetwork.h>
-#include <usr/autoboot.h>
+#include <ipxe/efi/efi_cachedhcp.h>
+#include <ipxe/efi/Protocol/PxeBaseCode.h>
 
 /** @file
  *
- * EFI autoboot device
+ * EFI cached DHCP packet
  *
  */
 
 /**
- * Identify autoboot device
+ * Record cached DHCP packet
  *
  * @v device		Device handle
  * @ret rc		Return status code
  */
-int efi_set_autoboot_ll_addr ( EFI_HANDLE device ) {
-	EFI_BOOT_SERVICES *bs = efi_systab->BootServices;
+int efi_cachedhcp_record ( EFI_HANDLE device ) {
+		EFI_BOOT_SERVICES *bs = efi_systab->BootServices;
 	union {
-		EFI_SIMPLE_NETWORK_PROTOCOL *snp;
+		EFI_PXE_BASE_CODE_PROTOCOL *pxe;
 		void *interface;
-	} snp;
-	EFI_SIMPLE_NETWORK_MODE *mode;
+	} pxe;
+	EFI_PXE_BASE_CODE_MODE *mode;
 	EFI_STATUS efirc;
 	int rc;
 
-	/* Look for an SNP instance on the image's device handle */
+	/* Look for a PXE base code instance on the image's device handle */
 	if ( ( efirc = bs->OpenProtocol ( device,
-					  &efi_simple_network_protocol_guid,
-					  &snp.interface, efi_image_handle,
+					  &efi_pxe_base_code_protocol_guid,
+					  &pxe.interface, efi_image_handle,
 					  NULL,
 					  EFI_OPEN_PROTOCOL_GET_PROTOCOL ))!=0){
 		rc = -EEFI ( efirc );
-		DBGC ( device, "EFI %s has no SNP instance: %s\n",
+		DBGC ( device, "EFI %s has no PXE base code instance: %s\n",
 		       efi_handle_name ( device ), strerror ( rc ) );
-		return rc;
+		goto err_open;
 	}
 
-	/* Record autoboot device */
-	mode = snp.snp->Mode;
-	set_autoboot_ll_addr ( &mode->CurrentAddress, mode->HwAddressSize );
-	DBGC ( device, "EFI %s found autoboot link-layer address:\n",
-	       efi_handle_name ( device ) );
-	DBGC_HDA ( device, 0, &mode->CurrentAddress, mode->HwAddressSize );
+	/* Do not attempt to cache IPv6 packets */
+	mode = pxe.pxe->Mode;
+	if ( mode->UsingIpv6 ) {
+		rc = -ENOTSUP;
+		DBGC ( device, "EFI %s has IPv6 PXE base code\n",
+		       efi_handle_name ( device ) );
+		goto err_ipv6;
+	}
 
-	/* Close protocol */
-	bs->CloseProtocol ( device, &efi_simple_network_protocol_guid,
+	/* Record DHCPACK, if present */
+	if ( mode->DhcpAckReceived &&
+	     ( ( rc = cachedhcp_record ( virt_to_user ( &mode->DhcpAck ),
+					 sizeof ( mode->DhcpAck ) ) ) != 0 ) ) {
+		DBGC ( device, "EFI %s could not record DHCPACK: %s\n",
+		       efi_handle_name ( device ), strerror ( rc ) );
+		goto err_record;
+	}
+
+	/* Success */
+	rc = 0;
+
+ err_record:
+ err_ipv6:
+	bs->CloseProtocol ( device, &efi_pxe_base_code_protocol_guid,
 			    efi_image_handle, NULL );
-
-	return 0;
+ err_open:
+	return rc;
 }
