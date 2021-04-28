@@ -337,6 +337,9 @@ void * efipci_ioremap ( struct pci_device *pci, unsigned long bus_addr,
 		offset = le64_to_cpu ( u.res->qword.offset );
 		start = ( offset + le64_to_cpu ( u.res->qword.min ) );
 		end = ( start + le64_to_cpu ( u.res->qword.len ) );
+		DBGC2 ( pci, "EFIPCI " PCI_FMT " found range [%08llx,%08llx) "
+			"-> [%08llx,%08llx)\n", PCI_ARGS ( pci ), start, end,
+			( start - offset ), ( end - offset ) );
 		if ( ( bus_addr < start ) || ( ( bus_addr + len ) > end ) )
 			continue;
 
@@ -523,7 +526,8 @@ static void * efipci_dma_alloc ( struct dma_device *dma,
 
 	/* Map buffer */
 	if ( ( rc = efipci_dma_map ( dma, map, virt_to_phys ( addr ),
-				     len, DMA_BI ) ) != 0 )
+				     ( pages * EFI_PAGE_SIZE ),
+				     DMA_BI ) ) != 0 )
 		goto err_map;
 
 	/* Increment allocation count (for debugging) */
